@@ -3,7 +3,7 @@
  * CT Storefront Starter functions and definitions
  *
  * @package CT_Storefront
- * @version 1.0.0
+ * @version 2.0.0
  */
 
 // Prevent direct access
@@ -45,15 +45,16 @@ add_action('after_setup_theme', 'ct_storefront_setup');
  * Enqueue scripts and styles
  */
 function ct_storefront_scripts() {
-    wp_enqueue_style('ct-storefront-style', get_stylesheet_uri(), array(), '1.0.0');
+    wp_enqueue_style('ct-storefront-style', get_stylesheet_uri(), array(), '2.0.0');
     wp_enqueue_script('jquery');
-    wp_enqueue_script('ct-storefront-script', get_template_directory_uri() . '/assets/js/main.js', array('jquery'), '1.0.0', true);
+    wp_enqueue_script('ct-storefront-script', get_template_directory_uri() . '/assets/js/main.js', array('jquery'), '2.0.0', true);
     
     wp_localize_script('ct-storefront-script', 'ct_ajax', array(
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('ct_ajax_nonce'),
         'loading_text' => __('Loading...', 'ct-storefront'),
         'no_results_text' => __('No products found', 'ct-storefront'),
+        'track_analytics' => true,
     ));
 }
 add_action('wp_enqueue_scripts', 'ct_storefront_scripts');
@@ -214,6 +215,7 @@ function ct_storefront_filter_products() {
             $category = get_post_meta(get_the_ID(), '_product_category', true);
             $rating = get_post_meta(get_the_ID(), '_product_rating', true);
             $badge = get_post_meta(get_the_ID(), '_product_badge', true);
+            $in_stock = get_post_meta(get_the_ID(), '_product_in_stock', true);
             
             ?>
             <div class="product-card fade-in">
@@ -229,6 +231,10 @@ function ct_storefront_filter_products() {
                             <?php echo esc_html(ucfirst($badge)); ?>
                         </span>
                     <?php endif; ?>
+                    
+                    <?php if ($in_stock !== 'yes') : ?>
+                        <span class="product-badge out-of-stock">Out of Stock</span>
+                    <?php endif; ?>
                 </div>
                 
                 <div class="product-content">
@@ -241,13 +247,13 @@ function ct_storefront_filter_products() {
                     
                     <?php if ($rating) : ?>
                         <div class="product-rating">
-                            <div class="stars">
+                            <div class="stars" aria-label="<?php echo number_format($rating, 1); ?> out of 5 stars">
                                 <?php
                                 for ($i = 1; $i <= 5; $i++) {
                                     if ($i <= $rating) {
-                                        echo '★';
+                                        echo '<span aria-hidden="true">★</span>';
                                     } else {
-                                        echo '☆';
+                                        echo '<span aria-hidden="true">☆</span>';
                                     }
                                 }
                                 ?>
@@ -256,8 +262,8 @@ function ct_storefront_filter_products() {
                         </div>
                     <?php endif; ?>
                     
-                    <button class="add-to-cart" data-product-id="<?php echo get_the_ID(); ?>">
-                        Add to Cart
+                    <button class="add-to-cart" data-product-id="<?php echo get_the_ID(); ?>" <?php echo ($in_stock !== 'yes') ? 'disabled' : ''; ?>>
+                        <?php echo ($in_stock === 'yes') ? 'Add to Cart' : 'Out of Stock'; ?>
                     </button>
                 </div>
             </div>
@@ -275,6 +281,40 @@ function ct_storefront_filter_products() {
 }
 add_action('wp_ajax_ct_filter_products', 'ct_storefront_filter_products');
 add_action('wp_ajax_nopriv_ct_filter_products', 'ct_storefront_filter_products');
+
+/**
+ * Analytics tracking handler
+ */
+function ct_storefront_track_analytics() {
+    check_ajax_referer('ct_ajax_nonce', 'nonce');
+    
+    $action = sanitize_text_field($_POST['cta_action']);
+    $data = $_POST['cta_data'];
+    
+    // Store analytics data
+    $analytics_data = array(
+        'action' => $action,
+        'data' => $data,
+        'timestamp' => current_time('mysql'),
+        'user_ip' => $_SERVER['REMOTE_ADDR'],
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'],
+    );
+    
+    // Store in WordPress options (in production, use a proper analytics service)
+    $existing_data = get_option('ct_analytics_data', array());
+    $existing_data[] = $analytics_data;
+    
+    // Keep only last 1000 entries
+    if (count($existing_data) > 1000) {
+        $existing_data = array_slice($existing_data, -1000);
+    }
+    
+    update_option('ct_analytics_data', $existing_data);
+    
+    wp_send_json_success('Analytics tracked');
+}
+add_action('wp_ajax_ct_track_analytics', 'ct_storefront_track_analytics');
+add_action('wp_ajax_nopriv_ct_track_analytics', 'ct_storefront_track_analytics');
 
 /**
  * Add custom meta boxes for products
@@ -301,6 +341,7 @@ function ct_storefront_product_meta_box_callback($post) {
     $category = get_post_meta($post->ID, '_product_category', true);
     $rating = get_post_meta($post->ID, '_product_rating', true);
     $badge = get_post_meta($post->ID, '_product_badge', true);
+    $in_stock = get_post_meta($post->ID, '_product_in_stock', true);
     
     ?>
     <table class="form-table">
@@ -332,6 +373,15 @@ function ct_storefront_product_meta_box_callback($post) {
                     <option value=""><?php _e('No Badge', 'ct-storefront'); ?></option>
                     <option value="sale" <?php selected($badge, 'sale'); ?>><?php _e('Sale', 'ct-storefront'); ?></option>
                     <option value="new" <?php selected($badge, 'new'); ?>><?php _e('New', 'ct-storefront'); ?></option>
+                </select>
+            </td>
+        </tr>
+        <tr>
+            <th><label for="product_in_stock"><?php _e('In Stock', 'ct-storefront'); ?></label></th>
+            <td>
+                <select id="product_in_stock" name="product_in_stock">
+                    <option value="yes" <?php selected($in_stock, 'yes'); ?>><?php _e('Yes', 'ct-storefront'); ?></option>
+                    <option value="no" <?php selected($in_stock, 'no'); ?>><?php _e('No', 'ct-storefront'); ?></option>
                 </select>
             </td>
         </tr>
@@ -370,5 +420,167 @@ function ct_storefront_save_product_meta($post_id) {
     if (isset($_POST['product_badge'])) {
         update_post_meta($post_id, '_product_badge', sanitize_text_field($_POST['product_badge']));
     }
+    
+    if (isset($_POST['product_in_stock'])) {
+        update_post_meta($post_id, '_product_in_stock', sanitize_text_field($_POST['product_in_stock']));
+    }
 }
 add_action('save_post', 'ct_storefront_save_product_meta');
+
+/**
+ * Add JSON-LD structured data
+ */
+function ct_storefront_add_json_ld() {
+    if (is_singular('product')) {
+        global $post;
+        
+        $price = get_post_meta($post->ID, '_product_price', true);
+        $category = get_post_meta($post->ID, '_product_category', true);
+        $rating = get_post_meta($post->ID, '_product_rating', true);
+        $in_stock = get_post_meta($post->ID, '_product_in_stock', true);
+        
+        $json_ld = array(
+            '@context' => 'https://schema.org',
+            '@type' => 'Product',
+            'name' => get_the_title(),
+            'description' => get_the_excerpt(),
+            'image' => get_the_post_thumbnail_url($post->ID, 'full'),
+            'url' => get_permalink(),
+            'category' => ucfirst($category),
+            'offers' => array(
+                '@type' => 'Offer',
+                'price' => $price,
+                'priceCurrency' => 'USD',
+                'availability' => ($in_stock === 'yes') ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+                'url' => get_permalink(),
+            )
+        );
+        
+        if ($rating) {
+            $json_ld['aggregateRating'] = array(
+                '@type' => 'AggregateRating',
+                'ratingValue' => $rating,
+                'reviewCount' => 1
+            );
+        }
+        
+        echo '<script type="application/ld+json">' . wp_json_encode($json_ld) . '</script>';
+    }
+}
+add_action('wp_head', 'ct_storefront_add_json_ld');
+
+/**
+ * Add analytics admin page
+ */
+function ct_storefront_add_analytics_page() {
+    add_submenu_page(
+        'edit.php?post_type=product',
+        'Analytics',
+        'Analytics',
+        'manage_options',
+        'ct-analytics',
+        'ct_storefront_analytics_page'
+    );
+}
+add_action('admin_menu', 'ct_storefront_add_analytics_page');
+
+/**
+ * Analytics page callback
+ */
+function ct_storefront_analytics_page() {
+    $analytics_data = get_option('ct_analytics_data', array());
+    
+    ?>
+    <div class="wrap">
+        <h1>CT Storefront Analytics</h1>
+        
+        <div class="analytics-summary">
+            <h2>Summary</h2>
+            <p>Total events tracked: <?php echo count($analytics_data); ?></p>
+            
+            <?php
+            $action_counts = array();
+            foreach ($analytics_data as $event) {
+                $action = $event['action'];
+                $action_counts[$action] = isset($action_counts[$action]) ? $action_counts[$action] + 1 : 1;
+            }
+            
+            if (!empty($action_counts)) {
+                echo '<h3>Event Breakdown:</h3>';
+                echo '<ul>';
+                foreach ($action_counts as $action => $count) {
+                    echo '<li>' . esc_html(ucfirst(str_replace('_', ' ', $action))) . ': ' . $count . '</li>';
+                }
+                echo '</ul>';
+            }
+            ?>
+        </div>
+        
+        <div class="analytics-export">
+            <h2>Export Data</h2>
+            <a href="<?php echo admin_url('admin-post.php?action=ct_export_analytics'); ?>" class="button button-primary">Export as CSV</a>
+        </div>
+        
+        <div class="analytics-table">
+            <h2>Recent Events</h2>
+            <table class="wp-list-table widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>Data</th>
+                        <th>Timestamp</th>
+                        <th>IP Address</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php
+                    $recent_events = array_slice(array_reverse($analytics_data), 0, 50);
+                    foreach ($recent_events as $event) {
+                        echo '<tr>';
+                        echo '<td>' . esc_html(ucfirst(str_replace('_', ' ', $event['action']))) . '</td>';
+                        echo '<td>' . esc_html(json_encode($event['data'])) . '</td>';
+                        echo '<td>' . esc_html($event['timestamp']) . '</td>';
+                        echo '<td>' . esc_html($event['user_ip']) . '</td>';
+                        echo '</tr>';
+                    }
+                    ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <?php
+}
+
+/**
+ * Export analytics as CSV
+ */
+function ct_storefront_export_analytics() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+    
+    $analytics_data = get_option('ct_analytics_data', array());
+    
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="ct-analytics-' . date('Y-m-d') . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    
+    // CSV headers
+    fputcsv($output, array('Action', 'Data', 'Timestamp', 'IP Address', 'User Agent'));
+    
+    // CSV data
+    foreach ($analytics_data as $event) {
+        fputcsv($output, array(
+            $event['action'],
+            json_encode($event['data']),
+            $event['timestamp'],
+            $event['user_ip'],
+            $event['user_agent']
+        ));
+    }
+    
+    fclose($output);
+    exit;
+}
+add_action('admin-post_ct_export_analytics', 'ct_storefront_export_analytics');
